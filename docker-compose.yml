@@ -1,0 +1,9 @@
+services:
+  terminal:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      SPEED: "2"                              # свечей в секунду
+      REPLAY_FROM: "2025-02-13 20:00:00"      # начало test-периода
+    restart: unless-stopped
