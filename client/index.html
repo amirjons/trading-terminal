@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Торговый терминал · EUR/USD H1</title>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+:root{--bg:#0f1419;--card:#171d26;--line:#2a3340;--txt:#e5e9f0;--mut:#8b97a8;--up:#26a69a;--down:#ef5350}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.4 -apple-system,system-ui,sans-serif;padding:max(10px,env(safe-area-inset-top)) 10px 24px}
+.wrap{max-width:960px;margin:0 auto;display:grid;gap:10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.title{font-weight:600}.sub{color:var(--mut);font-size:12px}
+#price{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
+.sig{text-align:right}
+#sigLabel{font-size:30px;font-weight:800;letter-spacing:1px}
+.BUY{color:var(--up)}.SELL{color:var(--down)}.HOLD{color:var(--mut)}
+#chart{height:44vh;min-height:280px}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+button{flex:1;min-height:46px;border:1px solid var(--line);background:#202938;color:var(--txt);border-radius:10px;font-size:15px;font-weight:600;cursor:pointer}
+button.on{background:#2d4a7a;border-color:#4a78c2}
+button.buy{background:#1b4d46;border-color:var(--up)}button.sell{background:#5a2a2a;border-color:var(--down)}
+button:disabled{opacity:.4;cursor:not-allowed}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+@media(min-width:600px){.grid{grid-template-columns:repeat(4,1fr)}}
+.k{color:var(--mut);font-size:12px}.v{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums}
+.pos{color:var(--up)}.neg{color:var(--down)}
+table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
+th,td{padding:6px 4px;text-align:right;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}th{color:var(--mut);font-weight:500}
+#msg{color:#f0b429;min-height:18px;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card top">
+    <div>
+      <div class="title">EUR/USD · H1 · эмулятор</div>
+      <div id="price">—</div>
+      <div class="sub" id="status">подключение…</div>
+    </div>
+    <div class="sig">
+      <div class="k">Рекомендация LSTM</div>
+      <div id="sigLabel" class="HOLD">HOLD</div>
+      <div class="sub">уверенность <b id="conf">—</b> · p(рост) <b id="pup">—</b></div>
+    </div>
+  </div>
+
+  <div class="card"><div id="chart"></div></div>
+
+  <div class="card">
+    <div class="row" style="margin-bottom:8px">
+      <button id="bManual" class="on">Ручной режим</button>
+      <button id="bAuto">Автоторговля</button>
+    </div>
+    <div class="row">
+      <button id="bBuy" class="buy">BUY</button>
+      <button id="bSell" class="sell">SELL</button>
+      <button id="bClose">Закрыть</button>
+    </div>
+    <div id="msg"></div>
+  </div>
+
+  <div class="card grid">
+    <div><div class="k">Баланс</div><div class="v" id="bal">—</div></div>
+    <div><div class="k">Equity</div><div class="v" id="eq">—</div></div>
+    <div><div class="k">Нереализ. P&amp;L</div><div class="v" id="unr">—</div></div>
+    <div><div class="k">Итого P&amp;L (сделок: <span id="nt">0</span>)</div><div class="v" id="tot">—</div></div>
+    <div style="grid-column:1/-1"><div class="k">Открытая позиция</div><div class="v" id="posn">нет</div></div>
+  </div>
+
+  <div class="card">
+    <div class="k" style="margin-bottom:6px">История сделок</div>
+    <table><thead><tr><th>Закрыта (UTC)</th><th>Сторона</th><th>Вход</th><th>Выход</th><th>P&amp;L</th></tr></thead>
+    <tbody id="trades"></tbody></table>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const chart = LightweightCharts.createChart($('chart'), {
+  autoSize: true,
+  layout: {background: {color: '#171d26'}, textColor: '#cbd5e1'},
+  grid: {vertLines: {color: '#222b38'}, horzLines: {color: '#222b38'}},
+  rightPriceScale: {borderColor: '#2a3340'},
+  timeScale: {timeVisible: true, secondsVisible: false, borderColor: '#2a3340'},
+});
+const series = chart.addCandlestickSeries({
+  upColor: '#26a69a', downColor: '#ef5350',
+  borderUpColor: '#26a69a', borderDownColor: '#ef5350',
+  wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+  priceFormat: {type: 'price', precision: 5, minMove: 0.00001},
+});
+
+const money = x => (x >= 0 ? '+' : '') + x.toFixed(2);
+const cls = x => x >= 0 ? 'pos' : 'neg';
+const fmtTime = t => new Date(t * 1000).toISOString().slice(5, 16).replace('T', ' ');
+let mode = 'manual';
+
+function renderSignal(s) {
+  $('sigLabel').textContent = s.signal;
+  $('sigLabel').className = s.signal;
+  $('conf').textContent = (s.confidence * 100).toFixed(1) + '%';
+  $('pup').textContent = (s.p_up * 100).toFixed(1) + '%';
+}
+
+function renderAccount(a) {
+  mode = a.mode;
+  $('bManual').classList.toggle('on', mode === 'manual');
+  $('bAuto').classList.toggle('on', mode === 'auto');
+  ['bBuy', 'bSell', 'bClose'].forEach(id => $(id).disabled = mode === 'auto');
+  $('bal').textContent = a.balance.toFixed(2);
+  $('eq').textContent = a.equity.toFixed(2);
+  $('unr').textContent = money(a.unrealized); $('unr').className = 'v ' + cls(a.unrealized);
+  $('tot').textContent = money(a.total_pnl); $('tot').className = 'v ' + cls(a.total_pnl);
+  $('nt').textContent = a.n_trades;
+  $('posn').textContent = a.position ? `${a.position.side} @ ${a.position.entry.toFixed(5)}` : 'нет';
+  $('trades').innerHTML = a.trades.map(t =>
+    `<tr><td>${fmtTime(t.close_time)}</td><td class="${t.side === 'BUY' ? 'pos' : 'neg'}">${t.side}</td>` +
+    `<td>${t.entry.toFixed(5)}</td><td>${t.exit.toFixed(5)}</td>` +
+    `<td class="${cls(t.pnl)}">${money(t.pnl)}</td></tr>`).join('');
+}
+
+async function post(url, body) {
+  const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.detail || 'ошибка');
+  return j;
+}
+async function act(fn) {
+  try { $('msg').textContent = ''; renderAccount(await fn()); }
+  catch (e) { $('msg').textContent = e.message; }
+}
+$('bManual').onclick = () => act(() => post('/mode', {mode: 'manual'}));
+$('bAuto').onclick = () => act(() => post('/mode', {mode: 'auto'}));
+$('bBuy').onclick = () => act(() => post('/order', {action: 'buy'}));
+$('bSell').onclick = () => act(() => post('/order', {action: 'sell'}));
+$('bClose').onclick = () => act(() => post('/order', {action: 'close'}));
+
+function connect() {
+  const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+  ws.onopen = () => $('status').textContent = 'онлайн';
+  ws.onclose = () => { $('status').textContent = 'переподключение…'; setTimeout(connect, 1500); };
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.candle) {
+      series.update(m.candle);
+      $('price').textContent = m.candle.close.toFixed(5);
+      $('price').className = m.candle.close >= m.candle.open ? 'pos' : 'neg';
+    }
+    renderSignal(m.signal);
+    renderAccount(m.account);
+    if (m.finished) $('status').textContent = 'воспроизведение завершено';
+  };
+}
+
+(async () => {
+  const h = await (await fetch('/history?n=200')).json();
+  series.setData(h.candles);
+  if (h.cur) series.update(h.cur);
+  renderSignal(h.signal);
+  renderAccount(h.account);
+  chart.timeScale().fitContent();
+  connect();
+})();
+</script>
+</body>
+</html>
